@@ -1,0 +1,743 @@
+<!doctype html>
+<!--
+  DeepSeek API 涨价花费对比 — 纯前端单页工具
+  用法：直接用浏览器打开本文件，上传 DeepSeek 开放平台导出的 usage_data_*.zip
+       （或解压后的 amount-*.csv / cost-*.csv）。所有计算在本地完成，不上传任何数据。
+  价格来源：https://api-docs.deepseek.com/zh-cn/quick_start/pricing/（2026-08-14 存档）
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DeepSeek API 涨价花费对比</title>
+<style>
+  :root {
+    color-scheme: light;
+    --page: #f9f9f7;
+    --surface: #fcfcfb;
+    --ink: #0b0b0b;
+    --ink-2: #52514e;
+    --muted: #898781;
+    --grid: #e1e0d9;
+    --border: rgba(11, 11, 11, .10);
+    --accent: #2a78d6;
+    --accent-wash: rgba(42, 120, 214, .07);
+    --bad: #d03b3b;   /* 花费上升（不利） */
+    --good: #006300;  /* 花费下降（有利） */
+    --warn: #ec835a;  /* 提醒 */
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --page: #0d0d0d;
+      --surface: #1a1a19;
+      --ink: #ffffff;
+      --ink-2: #c3c2b7;
+      --muted: #898781;
+      --grid: #2c2c2a;
+      --border: rgba(255, 255, 255, .10);
+      --accent: #3987e5;
+      --accent-wash: rgba(57, 135, 229, .12);
+      --good: #0ca30c;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--page);
+    color: var(--ink);
+    font: 15px/1.6 system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  main { max-width: 1080px; margin: 0 auto; padding: 28px 20px 60px; }
+  header.page h1 { font-size: 24px; font-weight: 650; margin: 0 0 6px; }
+  header.page p { color: var(--ink-2); margin: 0 0 24px; max-width: 72ch; }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px 20px;
+    margin-bottom: 16px;
+  }
+  h2 { font-size: 15px; font-weight: 650; margin: 0 0 12px; }
+  h2 .unit { color: var(--muted); font-weight: 400; font-size: 13px; }
+
+  /* 上传区 */
+  .drop {
+    border: 1.5px dashed var(--grid);
+    border-radius: 12px;
+    padding: 36px 20px;
+    text-align: center;
+    cursor: pointer;
+    color: var(--ink-2);
+    transition: background .15s, border-color .15s;
+  }
+  .drop.drag, .drop:hover { border-color: var(--accent); background: var(--accent-wash); }
+  .drop strong { color: var(--ink); font-weight: 600; }
+  .drop .hint { display: block; margin-top: 8px; font-size: 13px; color: var(--muted); }
+  #loadErrors { margin: 10px 0 0; padding: 0; list-style: none; color: var(--bad); font-size: 13px; }
+
+  /* 概览 */
+  .meta { display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: center; font-size: 13px; color: var(--ink-2); }
+  .chip {
+    background: var(--page);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 2px 10px;
+    font-size: 12px;
+    color: var(--ink-2);
+    white-space: nowrap;
+  }
+  .chip b { color: var(--ink); font-weight: 600; }
+  .meta .spacer { flex: 1; }
+
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .tile { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
+  .t-label { font-size: 13px; color: var(--ink-2); }
+  .t-value { font-size: 26px; font-weight: 650; margin: 2px 0; letter-spacing: -.01em; }
+  .t-value.up { color: var(--bad); }
+  .t-value.down { color: var(--good); }
+  .t-sub { font-size: 12px; color: var(--muted); }
+
+  /* 滑杆 */
+  .share-row { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  .share-row input[type=range] { flex: 1; min-width: 200px; accent-color: var(--accent); }
+  #shareVal { font-size: 22px; font-weight: 650; min-width: 70px; font-variant-numeric: tabular-nums; }
+  .presets { display: flex; gap: 8px; flex-wrap: wrap; }
+  .btn {
+    font: inherit; font-size: 13px;
+    color: var(--ink-2);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 4px 12px;
+    cursor: pointer;
+  }
+  .btn:hover { border-color: var(--accent); color: var(--accent); }
+  .note { font-size: 13px; color: var(--muted); margin: 10px 0 0; }
+
+  /* 表格 */
+  .table-scroll { overflow-x: auto; }
+  table.data { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  table.data th {
+    text-align: right; font-weight: 500; color: var(--muted); font-size: 12px;
+    padding: 6px 10px; border-bottom: 1px solid var(--grid); white-space: nowrap;
+  }
+  table.data th:first-child, table.data td:first-child { text-align: left; padding-left: 2px; }
+  table.data td { padding: 7px 10px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+  table.data td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  table.data tbody tr:last-child td { border-bottom: none; }
+  table.data tfoot td { font-weight: 650; border-top: 1px solid var(--grid); border-bottom: none; padding-top: 8px; }
+  td.ratio { color: var(--ink-2); }
+
+  /* 警示 */
+  .warn-card { border-left: 3px solid var(--warn); }
+  .warn-card ul { margin: 0; padding-left: 2px; list-style: none; }
+  .warn-card li { margin: 2px 0; color: var(--ink-2); font-size: 13.5px; }
+  .warn-card li::before { content: "⚠ "; color: var(--warn); }
+
+  /* 价格设置 */
+  details.card > summary { cursor: pointer; font-size: 15px; font-weight: 650; }
+  details.card[open] > summary { margin-bottom: 12px; }
+  .price-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+  .price-model h4 { margin: 0 0 6px; font-size: 14px; font-weight: 600; }
+  .price-model .tag { margin-left: 8px; font-size: 11px; font-weight: 400; color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px; }
+  table.price-table { border-collapse: collapse; font-size: 13px; }
+  table.price-table th { font-weight: 500; color: var(--muted); font-size: 12px; padding: 4px 8px; text-align: right; }
+  table.price-table th[scope=row] { text-align: left; padding-left: 0; white-space: nowrap; }
+  table.price-table td { padding: 3px 8px; }
+  table.price-table input {
+    width: 92px; font: inherit; font-size: 13px; text-align: right;
+    color: var(--ink); background: var(--page);
+    border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px;
+    font-variant-numeric: tabular-nums;
+  }
+  table.price-table input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .price-actions { margin-top: 12px; }
+
+  /* 说明 */
+  .notes ul { margin: 0; padding-left: 20px; color: var(--ink-2); font-size: 13.5px; }
+  .notes li { margin: 4px 0; }
+  footer { margin-top: 28px; font-size: 12.5px; color: var(--muted); }
+  footer a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <header class="page">
+    <h1>DeepSeek API 涨价花费对比</h1>
+    <p>上传 DeepSeek 开放平台导出的用量数据 zip，按 <b>2026-08-17</b> 生效的新版峰谷定价，
+       估算同样的用量在涨价前后的花费差异。所有计算均在浏览器本地完成，数据不会被上传。</p>
+  </header>
+
+  <section class="card">
+    <div class="drop" id="drop" role="button" tabindex="0"
+         aria-label="上传用量数据文件">
+      将 <strong>usage_data_*.zip</strong> 拖到这里，或点击选择文件
+      <span class="hint">支持 zip 或解压后的 amount-*.csv / cost-*.csv，可多选、可多次追加 ·
+        导出路径：platform.deepseek.com → 用量信息 → 导出</span>
+    </div>
+    <input type="file" id="fileInput" accept=".zip,.csv" multiple hidden>
+    <ul id="loadErrors"></ul>
+  </section>
+
+  <section id="results" hidden>
+    <div class="card">
+      <div class="meta" id="meta"></div>
+    </div>
+
+    <div class="tiles" id="tiles"></div>
+
+    <div class="card">
+      <h2>高峰时段用量占比</h2>
+      <div class="share-row">
+        <span id="shareVal">29.2%</span>
+        <input type="range" id="share" min="0" max="100" step="0.1" value="29.1666667"
+               aria-label="高峰时段用量占比（百分比）">
+        <span class="presets">
+          <button class="btn" data-share="0">全空闲 0%</button>
+          <button class="btn" data-share="29.1666667">按时长均摊 29.2%</button>
+          <button class="btn" data-share="100">全高峰 100%</button>
+        </span>
+      </div>
+      <p class="note">新定价分高峰（北京时间 9:00–12:00、14:00–18:00，共 7 小时）与空闲两档，空闲价为高峰的一半。
+        导出数据按天聚合，无法还原用量在两个时段的真实分布 —— 请按你的使用习惯拖动调整；
+        29.2% 对应按时长均匀分布（7÷24）的假设。</p>
+    </div>
+
+    <div class="card warn-card" id="warnCard" hidden>
+      <ul id="warnList"></ul>
+    </div>
+
+    <div class="card">
+      <h2>按模型 <span class="unit">tokens · 元</span></h2>
+      <div class="table-scroll">
+        <table class="data">
+          <thead><tr>
+            <th>模型</th><th>输入·缓存命中</th><th>输入·缓存未命中</th><th>输出</th>
+            <th>请求数</th><th>涨价前</th><th>涨价后（预估）</th><th>倍数</th>
+          </tr></thead>
+          <tbody id="modelBody"></tbody>
+          <tfoot id="modelFoot"></tfoot>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>按日期 <span class="unit">tokens · 元</span></h2>
+      <div class="table-scroll">
+        <table class="data">
+          <thead><tr>
+            <th>日期</th><th>输入·缓存命中</th><th>输入·缓存未命中</th><th>输出</th>
+            <th>涨价前</th><th>涨价后（预估）</th><th>倍数</th>
+          </tr></thead>
+          <tbody id="dayBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <details class="card">
+      <summary>价格设置<span class="unit">（元 / 百万 tokens，可修改）</span></summary>
+      <div class="price-grid" id="priceBody"></div>
+      <div class="price-actions">
+        <button class="btn" id="resetPrices">恢复默认价格</button>
+      </div>
+      <p class="note">未内置价格的模型：涨价前花费会回退使用导出明细中的单价；新价（高峰、空闲）需在此填写后才会计入估算。</p>
+    </details>
+
+    <div class="card notes">
+      <h2>计算口径</h2>
+      <ul>
+        <li>新价格于北京时间 <b>2026-08-17 00:00</b> 生效；高峰时段为每日 9:00–12:00、14:00–18:00，
+            其余为空闲时段，空闲价为高峰价的一半（来源：DeepSeek 官方定价页，2026-08-14 存档）。</li>
+        <li><b>涨价前花费</b> = 各计费项 tokens × 现行牌价（未内置牌价的模型回退用明细中的单价），并与导出的账单（cost 文件）对账。</li>
+        <li><b>涨价后预估</b> = tokens × [ 高峰占比 × 高峰价 + (1 − 高峰占比) × 空闲价 ]；区间下限、上限分别按全部空闲、全部高峰计算。</li>
+        <li>request_count（请求数）不参与计费；赠送余额、折扣活动不在本工具考虑范围内。</li>
+        <li>重复上传相同时间段的数据会自动去重；上传多个 zip 可合并不同时间段。</li>
+      </ul>
+    </div>
+
+    <div style="text-align:right">
+      <button class="btn" id="clearData">清空数据，重新上传</button>
+    </div>
+  </section>
+
+  <footer>
+    价格来源：<a href="https://api-docs.deepseek.com/zh-cn/quick_start/pricing/" target="_blank" rel="noopener">DeepSeek API 文档 · 模型 &amp; 价格</a>（2026-08-14）。
+    本页面为纯前端工具，可离线使用。
+  </footer>
+</main>
+
+<script id="core">
+'use strict';
+/* ============ 常量与价格表（元 / 百万 tokens） ============ */
+const DEFAULT_PEAK_SHARE = 7 / 24;   // 高峰 9:00–12:00 + 14:00–18:00 = 7 小时
+const TYPE_MAP = {
+  input_cache_hit_tokens: 'hit',
+  input_cache_miss_tokens: 'miss',
+  output_tokens: 'out',
+  request_count: 'req',
+};
+const DEFAULT_PRICES = {
+  'deepseek-v4-flash': {
+    old:  { hit: 0.02,  miss: 1,   out: 2 },
+    peak: { hit: 0.10,  miss: 3,   out: 9 },
+    off:  { hit: 0.05,  miss: 1.5, out: 4.5 },
+  },
+  'deepseek-v4-pro': {
+    old:  { hit: 0.025, miss: 3,   out: 6 },
+    peak: { hit: 0.30,  miss: 9,   out: 27 },
+    off:  { hit: 0.15,  miss: 4.5, out: 13.5 },
+  },
+};
+
+/* ============ zip 解析（原生 DecompressionStream，零依赖） ============ */
+async function inflateRaw(u8) {
+  const stream = new Blob([u8]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+async function readZip(buf) {
+  const u8 = new Uint8Array(buf);
+  const dv = new DataView(buf);
+  if (u8.length < 22) throw new Error('不是有效的 zip 文件');
+  let eocd = -1;
+  for (let i = u8.length - 22; i >= 0 && i >= u8.length - 22 - 65535; i--) {
+    if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error('不是有效的 zip 文件（找不到目录结尾）');
+  const count = dv.getUint16(eocd + 10, true);
+  let ptr = dv.getUint32(eocd + 16, true);
+  const files = [];
+  const utf8 = new TextDecoder('utf-8');
+  for (let n = 0; n < count; n++) {
+    if (dv.getUint32(ptr, true) !== 0x02014b50) throw new Error('zip 中央目录损坏');
+    const method = dv.getUint16(ptr + 10, true);
+    const compSize = dv.getUint32(ptr + 20, true);
+    const nameLen = dv.getUint16(ptr + 28, true);
+    const extraLen = dv.getUint16(ptr + 30, true);
+    const commentLen = dv.getUint16(ptr + 32, true);
+    const localOff = dv.getUint32(ptr + 42, true);
+    const name = utf8.decode(u8.subarray(ptr + 46, ptr + 46 + nameLen));
+    ptr += 46 + nameLen + extraLen + commentLen;
+    if (name.endsWith('/')) continue;
+    if (dv.getUint32(localOff, true) !== 0x04034b50) throw new Error('zip 本地文件头损坏');
+    const lNameLen = dv.getUint16(localOff + 26, true);
+    const lExtraLen = dv.getUint16(localOff + 28, true);
+    const start = localOff + 30 + lNameLen + lExtraLen;
+    if (start + compSize > u8.length) throw new Error('zip 数据不完整');
+    const raw = u8.subarray(start, start + compSize);
+    if (method === 0) files.push({ name, data: raw });
+    else if (method === 8) files.push({ name, data: await inflateRaw(raw) });
+    /* 其他压缩方式：跳过 */
+  }
+  return files;
+}
+
+/* ============ CSV 解析 ============ */
+function parseCSV(text) {
+  text = text.replace(/^\uFEFF/, '');
+  const rows = [];
+  let row = [], field = '', inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i + 1] === '"') { field += '"'; i++; }
+        else inQuotes = false;
+      } else field += c;
+    } else if (c === '"') inQuotes = true;
+    else if (c === ',') { row.push(field); field = ''; }
+    else if (c === '\n' || c === '\r') {
+      if (c === '\r' && text[i + 1] === '\n') i++;
+      row.push(field); field = '';
+      if (row.length > 1 || row[0] !== '') rows.push(row);
+      row = [];
+    } else field += c;
+  }
+  if (field !== '' || row.length) {
+    row.push(field);
+    if (row.length > 1 || row[0] !== '') rows.push(row);
+  }
+  return rows;
+}
+function toObjects(rows) {
+  const [header, ...rest] = rows;
+  const keys = header.map(h => h.trim());
+  return rest.map(r => Object.fromEntries(keys.map((k, i) => [k, (r[i] ?? '').trim()])));
+}
+
+/* ============ 数据摄入（按行去重，可多次追加） ============ */
+function ingestText(text, store) {
+  const rows = parseCSV(text);
+  if (rows.length < 2) return { kind: null, count: 0 };
+  const header = rows[0].map(h => h.trim().toLowerCase());
+  const kind = header.includes('type') && header.includes('amount') ? 'usage'
+             : header.includes('cost') && header.includes('currency') ? 'cost'
+             : null;
+  if (!kind) return { kind: null, count: 0 };
+  let count = 0;
+  for (const o of toObjects(rows)) {
+    if (!o.model) continue;
+    if (kind === 'usage') {
+      if (!o.type) continue;
+      const key = [o.user_id, o.start_time_iso, o.end_time_iso, o.model, o.api_key_name, o.api_key, o.type].join('|');
+      store.usage.set(key, {
+        day: (o.start_time_iso || '').slice(0, 10),
+        model: o.model,
+        type: o.type,
+        price: o.price === '' || o.price == null ? null : Number(o.price),
+        amount: Number(o.amount) || 0,
+      });
+    } else {
+      const key = [o.user_id, o.start_time_iso, o.end_time_iso, o.model, o.wallet_type].join('|');
+      store.cost.set(key, {
+        day: (o.start_time_iso || '').slice(0, 10),
+        model: o.model,
+        cost: Number(o.cost) || 0,
+        currency: o.currency || 'CNY',
+        wallet: o.wallet_type || '',
+      });
+    }
+    count++;
+  }
+  return { kind, count };
+}
+
+/* ============ 核心计算 ============ */
+function computeAll(store, prices, share) {
+  const TYPES = ['hit', 'miss', 'out'];
+  const models = new Map();
+  const days = new Map();
+  const warnings = new Set();
+  const totals = { hit: 0, miss: 0, out: 0, req: 0 };
+
+  for (const r of store.usage.values()) {
+    const t = TYPE_MAP[r.type];
+    if (!t) { if (r.amount) warnings.add(`未识别的计费项「${r.type}」已被忽略`); continue; }
+    let m = models.get(r.model);
+    if (!m) models.set(r.model, m = { model: r.model, hit: 0, miss: 0, out: 0, req: 0, rowPrice: {} });
+    m[t] += r.amount;
+    totals[t] += r.amount;
+    if (t !== 'req' && r.price != null && !Number.isNaN(r.price)) m.rowPrice[t] = r.price * 1e6;
+    let d = days.get(r.day);
+    if (!d) days.set(r.day, d = { day: r.day, perModel: new Map() });
+    let dm = d.perModel.get(r.model);
+    if (!dm) d.perModel.set(r.model, dm = { hit: 0, miss: 0, out: 0, req: 0 });
+    dm[t] += r.amount;
+  }
+
+  const num = v => (v == null || v === '' || Number.isNaN(Number(v)) ? null : Number(v));
+  const oldPrice = (model, t) => {
+    const v = num(prices[model]?.old?.[t]);
+    if (v != null) return v;
+    return models.get(model)?.rowPrice?.[t] ?? null;
+  };
+  const newPrice = (model, t, s) => {
+    const pk = num(prices[model]?.peak?.[t]);
+    const off = num(prices[model]?.off?.[t]);
+    if (pk == null || off == null) return null;
+    return s * pk + (1 - s) * off;
+  };
+  const bucketCost = (model, tok, priceFn) => {
+    let sum = 0;
+    for (const t of TYPES) {
+      if (!tok[t]) continue;
+      const p = priceFn(model, t);
+      if (p == null) return null;
+      sum += tok[t] / 1e6 * p;
+    }
+    return sum;
+  };
+
+  const modelRows = [];
+  const excluded = [];
+  let oldTotal = 0, newTotal = 0, newMin = 0, newMax = 0, oldMissing = false;
+  for (const m of models.values()) {
+    const oldCost = bucketCost(m.model, m, oldPrice);
+    const newCost = bucketCost(m.model, m, (mo, t) => newPrice(mo, t, share));
+    const newLo = bucketCost(m.model, m, (mo, t) => newPrice(mo, t, 0));
+    const newHi = bucketCost(m.model, m, (mo, t) => newPrice(mo, t, 1));
+    if (oldCost == null) {
+      oldMissing = true;
+      warnings.add(`模型「${m.model}」缺少现行单价，涨价前合计未包含该模型`);
+    } else oldTotal += oldCost;
+    if (newCost == null) excluded.push(m.model);
+    else { newTotal += newCost; newMin += newLo; newMax += newHi; }
+    modelRows.push({ ...m, oldCost, newCost, newLo, newHi });
+  }
+  modelRows.sort((a, b) => (b.oldCost ?? 0) - (a.oldCost ?? 0));
+  if (excluded.length) {
+    warnings.add(`模型「${excluded.join('、')}」未内置新价格，涨价后估算未包含它们 —— 可在「价格设置」中补充`);
+  }
+
+  const dayRows = [...days.values()].sort((a, b) => (a.day < b.day ? -1 : 1)).map(d => {
+    const tok = { hit: 0, miss: 0, out: 0 };
+    let oldCost = 0, newCost = 0, hasOld = false;
+    for (const [model, dm] of d.perModel) {
+      for (const t of TYPES) tok[t] += dm[t];
+      const oc = bucketCost(model, dm, oldPrice);
+      if (oc != null) { oldCost += oc; hasOld = true; }
+      const nc = bucketCost(model, dm, (mo, t) => newPrice(mo, t, share));
+      if (nc != null) newCost += nc;
+    }
+    return { day: d.day, ...tok, oldCost: hasOld ? oldCost : null, newCost };
+  });
+
+  const bills = {};
+  for (const c of store.cost.values()) bills[c.currency] = (bills[c.currency] || 0) + c.cost;
+
+  return {
+    modelRows, dayRows, oldTotal, newTotal, newMin, newMax, bills,
+    warnings: [...warnings], excluded, totals, oldMissing,
+    dateRange: dayRows.length ? [dayRows[0].day, dayRows[dayRows.length - 1].day] : null,
+    modelCount: models.size,
+  };
+}
+</script>
+
+<script>
+'use strict';
+/* ============ 页面状态与渲染 ============ */
+const $ = sel => document.querySelector(sel);
+const state = {
+  store: { usage: new Map(), cost: new Map() },
+  files: [],
+  loadErrors: [],
+  prices: structuredClone(DEFAULT_PRICES),
+  share: DEFAULT_PEAK_SHARE,
+};
+
+const esc = s => String(s).replace(/[&<>"']/g, c =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const fmtMoney = v => {
+  if (v == null) return '—';
+  const digits = Math.abs(v) > 0 && Math.abs(v) < 0.01 ? 4 : 2;
+  return '¥' + v.toLocaleString('zh-CN', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+};
+const fmtTok = n => (n || 0).toLocaleString('zh-CN');
+const fmtTokCompact = n =>
+  n >= 1e8 ? (n / 1e8).toFixed(2) + ' 亿' :
+  n >= 1e4 ? (n / 1e4).toFixed(1) + ' 万' : String(n);
+const fmtRatio = (n, o) => (o > 0 && n != null ? '×' + (n / o).toFixed(2) : '—');
+const KIND_LABEL = { usage: '用量明细', cost: '账单' };
+
+/* ---------- 文件读入 ---------- */
+async function handleFiles(list) {
+  const errors = [];
+  for (const f of list) {
+    try {
+      if (/\.zip$/i.test(f.name)) {
+        const entries = await readZip(await f.arrayBuffer());
+        let used = 0;
+        for (const e of entries) {
+          const base = e.name.split('/').pop();
+          if (e.name.startsWith('__MACOSX') || base.startsWith('.') || !/\.csv$/i.test(base)) continue;
+          const { kind, count } = ingestText(new TextDecoder('utf-8').decode(e.data), state.store);
+          if (kind) { state.files.push({ name: base, kind, count }); used++; }
+        }
+        if (!used) errors.push(`${f.name}：zip 内未找到可识别的 CSV`);
+      } else if (/\.csv$/i.test(f.name)) {
+        const { kind, count } = ingestText(await f.text(), state.store);
+        if (kind) state.files.push({ name: f.name, kind, count });
+        else errors.push(`${f.name}：无法识别的 CSV 表头（需要 amount-*.csv 或 cost-*.csv）`);
+      } else {
+        errors.push(`${f.name}：仅支持 zip 或 csv 文件`);
+      }
+    } catch (err) {
+      errors.push(`${f.name}：${err && err.message || err}`);
+    }
+  }
+  state.loadErrors = errors;
+  renderPrices();
+  renderAll();
+  if (state.store.usage.size) $('#results').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+/* ---------- 渲染 ---------- */
+function renderAll() {
+  $('#loadErrors').innerHTML = state.loadErrors.map(e => `<li>${esc(e)}</li>`).join('');
+  const hasData = state.store.usage.size > 0;
+  $('#results').hidden = !hasData;
+  if (!hasData) return;
+  const res = computeAll(state.store, state.prices, state.share);
+  renderMeta(res);
+  renderTiles(res);
+  renderModelTable(res);
+  renderDayTable(res);
+  renderWarnings(res);
+}
+
+function renderMeta(res) {
+  const chips = state.files.map(f =>
+    `<span class="chip"><b>${esc(KIND_LABEL[f.kind])}</b> ${esc(f.name)}</span>`).join('');
+  const tokTotal = res.totals.hit + res.totals.miss + res.totals.out;
+  const range = res.dateRange
+    ? (res.dateRange[0] === res.dateRange[1] ? res.dateRange[0] : `${res.dateRange[0]} ~ ${res.dateRange[1]}`)
+    : '—';
+  $('#meta').innerHTML = `${chips}<span class="spacer"></span>
+    <span>覆盖 <b>${esc(range)}</b>（${res.dayRows.length} 天）·
+    ${res.modelCount} 个模型 · tokens 合计 ${fmtTokCompact(tokTotal)} · 请求 ${fmtTok(res.totals.req)} 次</span>`;
+}
+
+function renderTiles(res) {
+  const o = res.oldTotal, n = res.newTotal;
+  const bill = res.bills.CNY;
+  let billNote = '按现行牌价计算';
+  if (bill != null && bill > 0) {
+    const diff = Math.abs(o - bill) / bill;
+    billNote = diff < 0.005
+      ? `与账单一致（${fmtMoney(bill)}）`
+      : `账单为 ${fmtMoney(bill)}，与牌价计算差 ${(diff * 100).toFixed(1)}%`;
+  }
+  const delta = n - o;
+  const up = delta >= 0;
+  const ratio = o > 0 ? n / o : null;
+  const partial = res.excluded.length ? ' · 部分模型未计入' : '';
+  $('#tiles').innerHTML = `
+    <div class="tile">
+      <div class="t-label">涨价前花费</div>
+      <div class="t-value">${fmtMoney(o)}</div>
+      <div class="t-sub">${esc(billNote)}</div>
+    </div>
+    <div class="tile">
+      <div class="t-label">涨价后预估</div>
+      <div class="t-value">${fmtMoney(n)}</div>
+      <div class="t-sub">区间 ${fmtMoney(res.newMin)} ~ ${fmtMoney(res.newMax)}${partial}</div>
+    </div>
+    <div class="tile">
+      <div class="t-label">较涨价前${up ? '多花' : '少花'}</div>
+      <div class="t-value ${up ? 'up' : 'down'}">${up ? '▲ +' : '▼ −'}${fmtMoney(Math.abs(delta))}</div>
+      <div class="t-sub">${o > 0 ? (up ? '+' : '−') + (Math.abs(delta) / o * 100).toFixed(1) + '%' : '—'}</div>
+    </div>
+    <div class="tile">
+      <div class="t-label">相当于原价</div>
+      <div class="t-value">${ratio ? ratio.toFixed(2) + ' 倍' : '—'}</div>
+      <div class="t-sub">按高峰占比 ${(state.share * 100).toFixed(1)}% 估算</div>
+    </div>`;
+}
+
+function renderModelTable(res) {
+  $('#modelBody').innerHTML = res.modelRows.map(m => `
+    <tr>
+      <td>${esc(m.model)}</td>
+      <td class="num">${fmtTok(m.hit)}</td>
+      <td class="num">${fmtTok(m.miss)}</td>
+      <td class="num">${fmtTok(m.out)}</td>
+      <td class="num">${fmtTok(m.req)}</td>
+      <td class="num">${fmtMoney(m.oldCost)}</td>
+      <td class="num">${fmtMoney(m.newCost)}</td>
+      <td class="num ratio">${fmtRatio(m.newCost, m.oldCost)}</td>
+    </tr>`).join('');
+  $('#modelFoot').innerHTML = res.modelRows.length > 1 ? `
+    <tr>
+      <td>合计</td>
+      <td class="num">${fmtTok(res.totals.hit)}</td>
+      <td class="num">${fmtTok(res.totals.miss)}</td>
+      <td class="num">${fmtTok(res.totals.out)}</td>
+      <td class="num">${fmtTok(res.totals.req)}</td>
+      <td class="num">${fmtMoney(res.oldTotal)}</td>
+      <td class="num">${fmtMoney(res.newTotal)}</td>
+      <td class="num ratio">${fmtRatio(res.newTotal, res.oldTotal)}</td>
+    </tr>` : '';
+}
+
+function renderDayTable(res) {
+  $('#dayBody').innerHTML = res.dayRows.map(d => `
+    <tr>
+      <td>${esc(d.day)}</td>
+      <td class="num">${fmtTok(d.hit)}</td>
+      <td class="num">${fmtTok(d.miss)}</td>
+      <td class="num">${fmtTok(d.out)}</td>
+      <td class="num">${fmtMoney(d.oldCost)}</td>
+      <td class="num">${fmtMoney(d.newCost)}</td>
+      <td class="num ratio">${fmtRatio(d.newCost, d.oldCost)}</td>
+    </tr>`).join('');
+}
+
+function renderWarnings(res) {
+  const items = res.warnings;
+  $('#warnCard').hidden = !items.length;
+  $('#warnList').innerHTML = items.map(w => `<li>${esc(w)}</li>`).join('');
+}
+
+function renderPrices() {
+  const modelsInData = new Set([...state.store.usage.values()].map(r => r.model));
+  const all = [...new Set([...Object.keys(state.prices), ...modelsInData])];
+  const GROUPS = [['old', '现行价'], ['peak', '新价·高峰'], ['off', '新价·空闲']];
+  const COLS = [['hit', '缓存命中'], ['miss', '缓存未命中'], ['out', '输出']];
+  $('#priceBody').innerHTML = all.map(model => {
+    const p = state.prices[model] || {};
+    const rows = GROUPS.map(([g, label]) => `
+      <tr><th scope="row">${label}</th>${COLS.map(([t, tLabel]) => `
+        <td><input type="number" min="0" step="0.001" inputmode="decimal"
+          data-model="${esc(model)}" data-group="${g}" data-type="${t}"
+          value="${p[g]?.[t] ?? ''}"
+          aria-label="${esc(model)} ${label} ${tLabel}（元/百万 tokens）"></td>`).join('')}
+      </tr>`).join('');
+    const tag = modelsInData.has(model) || !state.store.usage.size ? '' : '<span class="tag">数据中未出现</span>';
+    return `<div class="price-model"><h4>${esc(model)}${tag}</h4>
+      <table class="price-table">
+        <thead><tr><th></th>${COLS.map(([, l]) => `<th>${l}</th>`).join('')}</tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>`;
+  }).join('');
+}
+
+/* ---------- 事件 ---------- */
+const drop = $('#drop');
+const fileInput = $('#fileInput');
+drop.addEventListener('click', () => fileInput.click());
+drop.addEventListener('keydown', e => {
+  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); }
+});
+['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, e => {
+  e.preventDefault(); drop.classList.add('drag');
+}));
+['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, e => {
+  e.preventDefault(); drop.classList.remove('drag');
+}));
+drop.addEventListener('drop', e => { if (e.dataTransfer.files.length) handleFiles(e.dataTransfer.files); });
+fileInput.addEventListener('change', () => {
+  if (fileInput.files.length) handleFiles(fileInput.files);
+  fileInput.value = '';
+});
+
+const slider = $('#share');
+slider.addEventListener('input', () => {
+  state.share = slider.value / 100;
+  $('#shareVal').textContent = (+slider.value).toFixed(1) + '%';
+  renderAll();
+});
+document.querySelectorAll('[data-share]').forEach(b => b.addEventListener('click', () => {
+  slider.value = b.dataset.share;
+  slider.dispatchEvent(new Event('input'));
+}));
+
+$('#priceBody').addEventListener('input', e => {
+  const el = e.target;
+  if (!el.dataset || !el.dataset.model) return;
+  const { model, group, type } = el.dataset;
+  if (!state.prices[model]) state.prices[model] = { old: {}, peak: {}, off: {} };
+  if (!state.prices[model][group]) state.prices[model][group] = {};
+  const v = el.value === '' ? NaN : Number(el.value);
+  if (Number.isNaN(v)) delete state.prices[model][group][type];
+  else state.prices[model][group][type] = v;
+  renderAll();
+});
+
+$('#resetPrices').addEventListener('click', () => {
+  state.prices = structuredClone(DEFAULT_PRICES);
+  renderPrices();
+  renderAll();
+});
+
+$('#clearData').addEventListener('click', () => {
+  state.store.usage.clear();
+  state.store.cost.clear();
+  state.files = [];
+  state.loadErrors = [];
+  renderAll();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+});
+</script>
+</body>
+</html>
